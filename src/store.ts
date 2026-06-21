@@ -1,189 +1,111 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
-  Alert,
-  AppConfig,
-  Approval,
-  ApprovalStatus,
-  BillRate,
-  ChangeRequest,
-  CurrencyCode,
-  Deal,
-  DealStage,
-  Employee,
-  Milestone,
+  BillingConfig,
+  Client,
+  ExpenseLine,
+  OutcomeConfig,
   Project,
-  RiskClassification,
-  RoleKey,
-  Scenario,
+  ResourceLine,
+  RoleRate,
+  SOW,
 } from './types';
 import { buildSeed, type SeedData } from './mock/seed';
-import { ROLES } from './rbac/roles';
 import { uid } from './utils';
 
-const DEFAULT_CONFIG: AppConfig = {
-  baseCurrency: 'USD',
-  fxPolicy: 'period-rate',
-  defaultHolidays: 10,
-  defaultLeaves: 21,
-  minMarginPct: 0.18,
-  marginFloorPct: 0.15,
-  focusFactor: 0.75,
-  approvalThresholds: { priceBelowTargetPct: 0.05, crValueUsd: 10_000, discountPct: 0.1 },
-};
-
-interface RiskOverrideMap {
-  [projectId: string]: { classification: RiskClassification; reason: string; user: string; at: string };
-}
-
 export interface AppState extends SeedData {
-  currentRole: RoleKey;
-  config: AppConfig;
-  riskOverrides: RiskOverrideMap;
+  // ── Accounts / rate cards ──
+  addClient: (c: Client) => void;
+  updateClient: (id: string, patch: Partial<Client>) => void;
+  deleteClient: (id: string) => void;
+  addRoleRate: (clientId: string, rate: RoleRate) => void;
+  updateRoleRate: (clientId: string, rateId: string, patch: Partial<RoleRate>) => void;
+  deleteRoleRate: (clientId: string, rateId: string) => void;
 
-  // role + config
-  setRole: (r: RoleKey) => void;
-  setBaseCurrency: (c: CurrencyCode) => void;
-  updateConfig: (patch: Partial<AppConfig>) => void;
+  // ── SOWs ──
+  addSow: (s: SOW) => void;
+  updateSow: (id: string, patch: Partial<SOW>) => void;
+  deleteSow: (id: string) => void;
 
-  // master data (Module A / Admin)
-  updateEmployee: (id: string, patch: Partial<Employee>) => void;
-  addBillRate: (rate: BillRate) => void;
+  // ── Projects ──
+  addProject: (p: Project) => void;
   updateProject: (id: string, patch: Partial<Project>) => void;
-  updateAllocation: (id: string, patch: Partial<{ allocationPct: number; billable: boolean }>) => void;
+  deleteProject: (id: string) => void;
 
-  // risk overrides (Module D)
-  overrideRisk: (projectId: string, classification: RiskClassification, reason: string) => void;
+  // ── Billing config ──
+  getBilling: (projectId: string) => BillingConfig;
+  setBilling: (projectId: string, patch: Partial<BillingConfig>) => void;
+  addResource: (projectId: string, r: ResourceLine) => void;
+  updateResource: (projectId: string, rid: string, patch: Partial<ResourceLine>) => void;
+  deleteResource: (projectId: string, rid: string) => void;
+  addExpense: (projectId: string, e: ExpenseLine) => void;
+  updateExpense: (projectId: string, eid: string, patch: Partial<ExpenseLine>) => void;
+  deleteExpense: (projectId: string, eid: string) => void;
 
-  // scenarios (Module G)
-  saveScenario: (s: Scenario) => void;
-  deleteScenario: (id: string) => void;
-
-  // change requests (Module K)
-  addChangeRequest: (cr: ChangeRequest) => void;
-  updateChangeRequest: (id: string, patch: Partial<ChangeRequest>) => void;
-
-  // revenue (Module L)
-  acceptMilestone: (id: string) => void;
-
-  // alerts (Module M)
-  setAlertStatus: (id: string, status: Alert['status']) => void;
-
-  // deals (Module N)
-  addDeal: (d: Deal) => void;
-  setDealStage: (id: string, stage: DealStage, reason?: string) => void;
-
-  // approvals (Module P)
-  decideApproval: (id: string, status: ApprovalStatus, reason: string) => void;
-
-  // audit
-  logAudit: (entity: string, entityId: string, action: string, detail: string) => void;
+  // ── Outcome config ──
+  getOutcome: (projectId: string) => OutcomeConfig;
+  setOutcome: (projectId: string, patch: Partial<OutcomeConfig>) => void;
 
   resetDemo: () => void;
 }
 
-function currentUserName(role: RoleKey): string {
-  return ROLES[role].name;
+function defaultBilling(projectId: string, hoursPerDay = 8): BillingConfig {
+  return { projectId, resources: [], hoursPerDay, annualLeaves: 18, nationalHolidays: 12, expenses: [] };
+}
+function defaultOutcome(projectId: string): OutcomeConfig {
+  return { projectId, hoursPerStoryPoint: 12.8, sprintsPerMonth: 2, reservePct: 0.15, caseACapacity: 7, caseBCapacity: 8, efficiencyGainPct: 0.1, clientDiscountPct: 0.05, minInvoiceSp: 120, mix: { fresherVelocityPct: 0.65, fresherReworkPct: 0.1, swaps: {} } };
 }
 
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
       ...buildSeed(),
-      currentRole: 'cdo',
-      config: DEFAULT_CONFIG,
-      riskOverrides: {},
 
-      setRole: (r) => set({ currentRole: r }),
-      setBaseCurrency: (c) => set((s) => ({ config: { ...s.config, baseCurrency: c } })),
-      updateConfig: (patch) => set((s) => ({ config: { ...s.config, ...patch } })),
+      addClient: (c) => set((s) => ({ clients: [...s.clients, c] })),
+      updateClient: (cid, patch) => set((s) => ({ clients: s.clients.map((c) => (c.id === cid ? { ...c, ...patch } : c)) })),
+      deleteClient: (cid) => set((s) => ({ clients: s.clients.filter((c) => c.id !== cid), projects: s.projects.filter((p) => p.clientId !== cid), sows: s.sows.filter((w) => w.clientId !== cid) })),
 
-      updateEmployee: (id, patch) =>
-        set((s) => ({ employees: s.employees.map((e) => (e.id === id ? { ...e, ...patch } : e)) })),
+      addRoleRate: (cid, rate) => set((s) => ({ clients: s.clients.map((c) => (c.id === cid ? { ...c, roleRates: [...c.roleRates, rate] } : c)) })),
+      updateRoleRate: (cid, rid, patch) => set((s) => ({ clients: s.clients.map((c) => (c.id === cid ? { ...c, roleRates: c.roleRates.map((r) => (r.id === rid ? { ...r, ...patch } : r)) } : c)) })),
+      deleteRoleRate: (cid, rid) => set((s) => ({ clients: s.clients.map((c) => (c.id === cid ? { ...c, roleRates: c.roleRates.filter((r) => r.id !== rid) } : c)) })),
 
-      addBillRate: (rate) =>
-        set((s) => ({ billRates: [...s.billRates, rate] })),
+      addSow: (w) => set((s) => ({ sows: [...s.sows, w] })),
+      updateSow: (wid, patch) => set((s) => ({ sows: s.sows.map((w) => (w.id === wid ? { ...w, ...patch } : w)) })),
+      deleteSow: (wid) => set((s) => ({ sows: s.sows.filter((w) => w.id !== wid) })),
 
-      updateProject: (id, patch) =>
-        set((s) => ({ projects: s.projects.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
+      addProject: (p) => set((s) => ({ projects: [...s.projects, p] })),
+      updateProject: (pid, patch) => set((s) => ({ projects: s.projects.map((p) => (p.id === pid ? { ...p, ...patch } : p)) })),
+      deleteProject: (pid) => set((s) => ({ projects: s.projects.filter((p) => p.id !== pid) })),
 
-      updateAllocation: (id, patch) =>
-        set((s) => ({ allocations: s.allocations.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
+      getBilling: (pid) => {
+        const existing = get().billingConfigs[pid];
+        if (existing) return existing;
+        const proj = get().projects.find((p) => p.id === pid);
+        const b = defaultBilling(pid, proj?.hoursPerDay ?? 8);
+        set((s) => ({ billingConfigs: { ...s.billingConfigs, [pid]: b } }));
+        return b;
+      },
+      setBilling: (pid, patch) => set((s) => ({ billingConfigs: { ...s.billingConfigs, [pid]: { ...(s.billingConfigs[pid] ?? defaultBilling(pid)), ...patch } } })),
+      addResource: (pid, r) => set((s) => { const b = s.billingConfigs[pid] ?? defaultBilling(pid); return { billingConfigs: { ...s.billingConfigs, [pid]: { ...b, resources: [...b.resources, r] } } }; }),
+      updateResource: (pid, rid, patch) => set((s) => { const b = s.billingConfigs[pid]; if (!b) return {}; return { billingConfigs: { ...s.billingConfigs, [pid]: { ...b, resources: b.resources.map((r) => (r.id === rid ? { ...r, ...patch } : r)) } } }; }),
+      deleteResource: (pid, rid) => set((s) => { const b = s.billingConfigs[pid]; if (!b) return {}; return { billingConfigs: { ...s.billingConfigs, [pid]: { ...b, resources: b.resources.filter((r) => r.id !== rid) } } }; }),
+      addExpense: (pid, e) => set((s) => { const b = s.billingConfigs[pid] ?? defaultBilling(pid); return { billingConfigs: { ...s.billingConfigs, [pid]: { ...b, expenses: [...b.expenses, e] } } }; }),
+      updateExpense: (pid, eid, patch) => set((s) => { const b = s.billingConfigs[pid]; if (!b) return {}; return { billingConfigs: { ...s.billingConfigs, [pid]: { ...b, expenses: b.expenses.map((e) => (e.id === eid ? { ...e, ...patch } : e)) } } }; }),
+      deleteExpense: (pid, eid) => set((s) => { const b = s.billingConfigs[pid]; if (!b) return {}; return { billingConfigs: { ...s.billingConfigs, [pid]: { ...b, expenses: b.expenses.filter((e) => e.id !== eid) } } }; }),
 
-      overrideRisk: (projectId, classification, reason) =>
-        set((s) => {
-          const user = currentUserName(s.currentRole);
-          const at = new Date().toISOString();
-          return {
-            riskOverrides: { ...s.riskOverrides, [projectId]: { classification, reason, user, at } },
-            auditEvents: [
-              { id: uid('aud'), userId: s.currentRole, userName: user, entity: 'RiskSignal', entityId: projectId, action: 'override', detail: `→ ${classification}: ${reason}`, at },
-              ...s.auditEvents,
-            ],
-          };
-        }),
+      getOutcome: (pid) => {
+        const existing = get().outcomeConfigs[pid];
+        if (existing) return existing;
+        const o = defaultOutcome(pid);
+        set((s) => ({ outcomeConfigs: { ...s.outcomeConfigs, [pid]: o } }));
+        return o;
+      },
+      setOutcome: (pid, patch) => set((s) => ({ outcomeConfigs: { ...s.outcomeConfigs, [pid]: { ...(s.outcomeConfigs[pid] ?? defaultOutcome(pid)), ...patch } } })),
 
-      saveScenario: (sc) => set((s) => ({ scenarios: [...s.scenarios.filter((x) => x.id !== sc.id), sc] })),
-      deleteScenario: (id) => set((s) => ({ scenarios: s.scenarios.filter((x) => x.id !== id) })),
-
-      addChangeRequest: (cr) =>
-        set((s) => ({
-          changeRequests: [cr, ...s.changeRequests],
-          auditEvents: [{ id: uid('aud'), userId: s.currentRole, userName: currentUserName(s.currentRole), entity: 'ChangeRequest', entityId: cr.id, action: 'create', detail: cr.description, at: new Date().toISOString() }, ...s.auditEvents],
-        })),
-      updateChangeRequest: (id, patch) =>
-        set((s) => ({ changeRequests: s.changeRequests.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
-
-      acceptMilestone: (id) =>
-        set((s) => ({
-          milestones: s.milestones.map((m: Milestone) => (m.id === id ? { ...m, acceptanceStatus: 'accepted', acceptedDate: new Date().toISOString().slice(0, 10) } : m)),
-          auditEvents: [{ id: uid('aud'), userId: s.currentRole, userName: currentUserName(s.currentRole), entity: 'Milestone', entityId: id, action: 'accept', detail: 'Milestone accepted → revenue recognized', at: new Date().toISOString() }, ...s.auditEvents],
-        })),
-
-      setAlertStatus: (id, status) =>
-        set((s) => ({ alerts: s.alerts.map((a) => (a.id === id ? { ...a, status } : a)) })),
-
-      addDeal: (d) => set((s) => ({ deals: [d, ...s.deals] })),
-      setDealStage: (id, stage, reason) =>
-        set((s) => ({
-          deals: s.deals.map((d) =>
-            d.id === id
-              ? { ...d, stage, winLossReason: reason ?? d.winLossReason, closedAt: ['won', 'lost', 'withdrawn'].includes(stage) ? new Date().toISOString().slice(0, 10) : d.closedAt, winProbability: stage === 'won' ? 100 : stage === 'lost' ? 0 : d.winProbability }
-              : d,
-          ),
-        })),
-
-      decideApproval: (id, status, reason) =>
-        set((s) => {
-          const at = new Date().toISOString();
-          const appr = s.approvals.find((a) => a.id === id);
-          const updates: Partial<AppState> = {
-            approvals: s.approvals.map((a) => (a.id === id ? { ...a, status, reason, decidedAt: at } : a)),
-            auditEvents: [{ id: uid('aud'), userId: s.currentRole, userName: currentUserName(s.currentRole), entity: 'Approval', entityId: id, action: status, detail: reason, at }, ...s.auditEvents],
-          };
-          // propagate to a linked change request
-          if (appr?.actionType === 'change-request') {
-            updates.changeRequests = s.changeRequests.map((c) =>
-              c.id === appr.actionRef ? { ...c, status: status === 'approved' ? 'approved' : 'rejected' } : c,
-            );
-          }
-          return updates as AppState;
-        }),
-
-      logAudit: (entity, entityId, action, detail) =>
-        set((s) => ({
-          auditEvents: [{ id: uid('aud'), userId: s.currentRole, userName: currentUserName(s.currentRole), entity, entityId, action, detail, at: new Date().toISOString() }, ...s.auditEvents],
-        })),
-
-      resetDemo: () => set({ ...buildSeed(), riskOverrides: {}, config: DEFAULT_CONFIG }),
+      resetDemo: () => set({ ...buildSeed() }),
     }),
-    {
-      name: 'opus-pulse-store',
-      version: 1,
-    },
+    { name: 'opus-pulse-conv-v4', version: 4 },
   ),
 );
 
-// ── Convenience selectors (used across screens) ───────────────────────────────
-export const useRole = () => useStore((s) => ROLES[s.currentRole]);
-export const useCan = (cap: keyof (typeof ROLES)['cdo']['can']) => useStore((s) => ROLES[s.currentRole].can[cap]);
+export { uid };
