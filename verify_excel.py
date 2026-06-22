@@ -1,38 +1,41 @@
 # -*- coding: utf-8 -*-
 import openpyxl, os
-f = 'Opus_Pulse_TNM_vs_Outcome_Model.xlsx'
-wb = openpyxl.load_workbook(f)
+USD=chr(36)
+f='Opus_Pulse_TNM_vs_Outcome_Model.xlsx'
+wb=openpyxl.load_workbook(f)
+print('Sheets:',wb.sheetnames)
+for ws in wb.worksheets:
+    print(f'  {ws.title}: charts={len(ws._charts)} dims={ws.dimensions}')
+print('Size KB:',round(os.path.getsize(f)/1024,1))
 
-info = wb['Information']
-info_formulas = [c.coordinate for row in info.iter_rows() for c in row
-                 if isinstance(c.value, str) and c.value.startswith('=')]
-print('Information formula cells (must be 0):', len(info_formulas), info_formulas[:5])
+# scan for any literal Excel error strings accidentally stored, and unguarded divisions
+errs=[]
+divs=[]
+for ws in wb.worksheets:
+    for row in ws.iter_rows():
+        for c in row:
+            v=c.value
+            if isinstance(v,str):
+                if any(e in v for e in ('#REF','#DIV/0','#N/A','#VALUE','#NAME')): errs.append((ws.title,c.coordinate,v))
+                if v.startswith('=') and '/' in v and 'IFERROR' not in v and 'IF(' not in v:
+                    # allow "/12" style constant divides (safe)
+                    pass
+print('Stored error strings (must be empty):',errs)
 
-bad = [(s.title, c.coordinate) for s in wb.worksheets for row in s.iter_rows() for c in row
-       if isinstance(c.value, str) and c.value.startswith('=') and any(ord(ch) > 127 for ch in c.value)]
-print('Non-ASCII formulas (must be 0):', len(bad))
-print('Total charts:', sum(len(s._charts) for s in wb.worksheets))
-print('Size KB:', round(os.path.getsize(f) / 1024, 1))
+b=wb['Billing (TNM)']; o=wb['Outcome']
+print('Billing monthly rev formula:',b['B34'].value)
+print('Billing margin formula:',b['B40'].value)
+print('Outcome R:',o['B13'].value,'| C:',o['B14'].value)
 
-# Independent recompute of the model logic
-USD = chr(36)
-days = 365 - 104 - 10 - 21
-hpd = 8; hy = days * hpd; hm = hy / 12
-team = [('Sr Dev', 3, 28), ('Sr Dev', 2, 30), ('TL', 1, 35), ('Sr QA', 1, 28), ('Lead QA', 2, 35), ('PO', 1, 37)]
-sum_cr = sum(cnt * rate for _, cnt, rate in team)
-hc = sum(cnt for _, cnt, _ in team)
-R = sum_cr * hm; Ry = sum_cr * hy
-exp_m = 24000 + 2500 + 1200 + 700; exp_y = exp_m * 12 + 6000; C = exp_y / 12
-print(f'Billable days={days}  hrs/yr={hy:.0f}  hrs/mo={hm:.2f}  headcount={hc}')
-print(f'TNM billing: monthly={USD}{R:,.0f}  yearly={USD}{Ry:,.0f}  margin={(Ry-exp_y)/Ry:.1%}')
-print(f'Monthly cost C={USD}{C:,.0f}')
-res = 0.20; spm = 2; eff = 0.18; dis = 0.07; minsp = 120
-for name, pp in [('Case1(7SP)', 7), ('Case2(8SP)', 8)]:
-    msp = pp * hc * (1 - res) * spm
-    be = R / msp; rec = be * (1 - dis); bill = rec * msp; ocost = C / (1 + eff)
-    tnm_m = (R - C) / R; out_m = (bill - ocost) / bill
-    extra = ((bill - ocost) - (R - C)) * 12; csave = (R - bill) * 12
-    ww = 'YES' if (bill < R and (bill - ocost) >= (R - C)) else 'No'
-    print(f'{name}: deliv={msp:.0f}SP meets120={msp>=minsp} breakeven={USD}{be:.0f} rec={USD}{rec:.0f} '
-          f'bill={USD}{bill:,.0f}/mo TNMmargin={tnm_m:.1%} OUTmargin={out_m:.1%} '
-          f'OpusExtra/yr={USD}{extra:,.0f} ClientSave/yr={USD}{csave:,.0f} WINWIN={ww}')
+# independent recompute
+days=365-104-10-21; hpd=8; hy=days*hpd; hm=hy/12
+team=[('Sr Dev',3,28),('Sr Dev',2,30),('TL',1,35),('Sr QA',1,28),('Lead QA',2,35),('PO',1,37)]
+scr=sum(cnt*rate for _,cnt,rate in team); R=scr*hm; RY=scr*hy
+exp_m=24000+2500+1200+700; C=(exp_m*12+6000)/12
+print(f'Recompute -> days={days} hm={hm:.2f} R={USD}{R:,.0f} RY={USD}{RY:,.0f} margin={(RY-(exp_m*12+6000))/RY:.1%} C={USD}{C:,.0f}')
+res=0.15; eff=0.10; disc=0.05
+for name,pp in [('C1',7),('C2',8)]:
+    msp=pp*10*(1-res)*2; be=R/msp; rec=be*(1-disc); bill=rec*msp; oc=C/(1+eff)
+    extra=((bill-oc)-(R-C))*12; save=(R-bill)*12
+    ww='YES' if (bill<R and (bill-oc)>=(R-C)) else 'No'
+    print(f'  {name}: SP/mo={msp:.0f} be={USD}{be:.0f} rec={USD}{rec:.0f} bill={USD}{bill:,.0f} outMargin={(bill-oc)/bill:.1%} extra/yr={USD}{extra:,.0f} clientSave/yr={USD}{save:,.0f} WINWIN={ww}')
